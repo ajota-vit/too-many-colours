@@ -54,7 +54,7 @@ int log_error(const char* fmt, ...) {
 	return result;
 }
 
-void log_block(FILE* stream, RGB left, RGB right) {
+void draw_block(FILE* stream, RGB left, RGB right) {
 	for (int i = 0; i < 3; i++) {
 		fprintf(stream, "\033[38;2;%d;%d;%dm", (int)(255.0 * left.r), (int)(255.0 * left.g), (int)(255.0 * left.b));
 		fprintf(stream, "\033[48;2;%d;%d;%dm", (int)(255.0 * left.r), (int)(255.0 * left.g), (int)(255.0 * left.b));
@@ -183,13 +183,17 @@ void parse_float(const char* string, Colour* colour) {
 	}
 }
 
+void eval_mod(const char* mod, ColourFormat format, RGB* rgb, HSV* hsv, HSL* hsl) {
+
+}
+
 int main(int argc, char* argv[]) {
-	int display_mode = 0;
 	int block = 0;
 	ColourFormat input_colour_format = COLOUR_FORMAT_NONE;
 	ColourFormat output_colour_format = COLOUR_FORMAT_NONE;
 	Repr input_format = REPR_NONE;
 	Repr output_format = REPR_NONE;
+	const char* mod = NULL;
 	const char* input_file_path = NULL;
 	const char* output_file_path = NULL;
 	FILE* input_file = NULL;
@@ -237,6 +241,13 @@ int main(int argc, char* argv[]) {
 			if (output_format != REPR_NONE)
 				log_warning("output format will be overriden by '%s'\n", value);
 			output_format = parse_format(value);
+		} else if (strncmp(argv[i], "-m", 2) == 0) {
+			if (argv[i][2] == '\0') value = argv[++i];
+			else value = argv[i]+2;
+
+			if (mod != NULL)
+				log_warning("mod will be overriden by '%s'\n", value);
+			mod = value;
 		} else if (strncmp(argv[i], "-i", 2) == 0) {
 			if (argv[i][2] == '\0') value = argv[++i];
 			else value = argv[i]+2;
@@ -262,7 +273,6 @@ int main(int argc, char* argv[]) {
 	}
 
 	if (output_format == REPR_NONE && output_colour_format == COLOUR_FORMAT_NONE) {
-		display_mode = 1;
 		output_colour_format = input_colour_format;
 		output_format = input_format;
 	}
@@ -327,47 +337,45 @@ int main(int argc, char* argv[]) {
 
 	free(line);
 
-	if (!display_mode) {
-		if (input_colour_format == COLOUR_FORMAT_RGB) {
-			if (output_colour_format == COLOUR_FORMAT_HSV) hsv = rgb_to_hsv(rgb);
-			if (output_colour_format == COLOUR_FORMAT_HSL) hsl = rgb_to_hsl(rgb);
-		} else if (input_colour_format == COLOUR_FORMAT_HSV) {
-			if (output_colour_format == COLOUR_FORMAT_RGB) rgb = hsv_to_rgb(hsv);
-			if (output_colour_format == COLOUR_FORMAT_HSL) hsl = hsv_to_hsl(hsv);
-		} else if (input_colour_format == COLOUR_FORMAT_HSL) {
-			if (output_colour_format == COLOUR_FORMAT_RGB) rgb = hsl_to_rgb(hsl);
-			if (output_colour_format == COLOUR_FORMAT_HSV) hsv = hsl_to_hsv(hsl);
-		}
+	if (input_colour_format == COLOUR_FORMAT_RGB) {
+		if (output_colour_format == COLOUR_FORMAT_HSV) hsv = rgb_to_hsv(rgb);
+		if (output_colour_format == COLOUR_FORMAT_HSL) hsl = rgb_to_hsl(rgb);
+	} else if (input_colour_format == COLOUR_FORMAT_HSV) {
+		if (output_colour_format == COLOUR_FORMAT_RGB) rgb = hsv_to_rgb(hsv);
+		if (output_colour_format == COLOUR_FORMAT_HSL) hsl = hsv_to_hsl(hsv);
+	} else if (input_colour_format == COLOUR_FORMAT_HSL) {
+		if (output_colour_format == COLOUR_FORMAT_RGB) rgb = hsl_to_rgb(hsl);
+		if (output_colour_format == COLOUR_FORMAT_HSV) hsv = hsl_to_hsv(hsl);
+	}
 
-		if (output_file_path == NULL) {
-			output_file = stdout;
-		} else {
-			output_file = fopen(output_file_path, "r");
-			if (output_file == NULL) {
-				log_error("could not open output file '%s'\n", output_file_path);
-				return EXIT_FAILURE;
-			}
-		}
+	eval_mod(mod, output_colour_format, &rgb, &hsv, &hsl);
 
-		if (output_format == REPR_HEX) {
-			fprintf(output_file, "#%02X%02X%02X\n", (int)(255.0 * rgb.r), (int)(255.0 * rgb.g), (int)(255.0 * rgb.b));
-		} else if (output_format == REPR_INT) {
-			if (output_colour_format == COLOUR_FORMAT_RGB)
-				fprintf(output_file, "%d %d %d\n", (int)(255.0 * rgb.r), (int)(255.0 * rgb.g), (int)(255.0 * rgb.b));
-			if (output_colour_format == COLOUR_FORMAT_HSV)
-				fprintf(output_file, "%d %d %d\n", (int)(hsv.h), (int)(100.0 * hsv.s), (int)(100.0 * hsv.v));
-			if (output_colour_format == COLOUR_FORMAT_HSL)
-				fprintf(output_file, "%d %d %d\n", (int)(hsl.h), (int)(100.0 * hsl.s), (int)(100.0 * hsl.l));
-		} else if (output_format == REPR_FLOAT) {
-			if (output_colour_format == COLOUR_FORMAT_RGB)
-				fprintf(output_file, "%lf %lf %lf\n", (255.0 * rgb.r), (255.0 * rgb.g), (255.0 * rgb.b));
-			if (output_colour_format == COLOUR_FORMAT_HSV)
-				fprintf(output_file, "%lf %lf %lf\n", (hsv.h), (100.0 * hsv.s), (100.0 * hsv.v));
-			if (output_colour_format == COLOUR_FORMAT_HSL)
-				fprintf(output_file, "%lf %lf %lf\n", (hsl.h), (100.0 * hsl.s), (100.0 * hsl.l));
-		}
-	} else {
+	if (output_file_path == NULL) {
 		output_file = stdout;
+	} else {
+		output_file = fopen(output_file_path, "r");
+		if (output_file == NULL) {
+			log_error("could not open output file '%s'\n", output_file_path);
+			return EXIT_FAILURE;
+		}
+	}
+
+	if (output_format == REPR_HEX) {
+		fprintf(output_file, "#%02X%02X%02X\n", (int)(255.0 * rgb.r), (int)(255.0 * rgb.g), (int)(255.0 * rgb.b));
+	} else if (output_format == REPR_INT) {
+		if (output_colour_format == COLOUR_FORMAT_RGB)
+			fprintf(output_file, "%d %d %d\n", (int)(255.0 * rgb.r), (int)(255.0 * rgb.g), (int)(255.0 * rgb.b));
+		if (output_colour_format == COLOUR_FORMAT_HSV)
+			fprintf(output_file, "%d %d %d\n", (int)(hsv.h), (int)(100.0 * hsv.s), (int)(100.0 * hsv.v));
+		if (output_colour_format == COLOUR_FORMAT_HSL)
+			fprintf(output_file, "%d %d %d\n", (int)(hsl.h), (int)(100.0 * hsl.s), (int)(100.0 * hsl.l));
+	} else if (output_format == REPR_FLOAT) {
+		if (output_colour_format == COLOUR_FORMAT_RGB)
+			fprintf(output_file, "%lf %lf %lf\n", (255.0 * rgb.r), (255.0 * rgb.g), (255.0 * rgb.b));
+		if (output_colour_format == COLOUR_FORMAT_HSV)
+			fprintf(output_file, "%lf %lf %lf\n", (hsv.h), (100.0 * hsv.s), (100.0 * hsv.v));
+		if (output_colour_format == COLOUR_FORMAT_HSL)
+			fprintf(output_file, "%lf %lf %lf\n", (hsl.h), (100.0 * hsl.s), (100.0 * hsl.l));
 	}
 
 	if (block) {
@@ -385,7 +393,7 @@ int main(int argc, char* argv[]) {
 			case COLOUR_FORMAT_HSL: right = hsl_to_rgb(hsl); break;
 		}
 
-		log_block(output_file, left, right);
+		draw_block(output_file, left, right);
 	}
 
 	if (input_file != stdin) fclose(input_file);
