@@ -11,3 +11,4 @@ make
 
 ## Screenshots
 <img src="https://github.com/ajota-vit/too-many-colours/blob/main/.github/screenshots/nord_red.png">
+<img src="https://github.com/ajota-vit/too-many-colours/blob/main/.github/screenshots/nord_yellow.png">
