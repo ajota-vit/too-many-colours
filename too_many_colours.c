@@ -474,7 +474,7 @@ int main(int argc, char* argv[]) {
 	if (block) {
 		Colour left;
 		Colour right;
-		convert(COLOUR_FORMAT_RGB, &out, &left);
+		convert(COLOUR_FORMAT_RGB, &in, &left);
 		convert(COLOUR_FORMAT_RGB, &out, &right);
 		draw_block(output_file, left.data.rgb, right.data.rgb);
 	}
