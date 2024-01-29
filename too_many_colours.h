@@ -21,7 +21,7 @@ typedef struct {
 
 #define RGB(R, G, B) ((RGB){R, G, B})
 #define HSV(H, S, V) ((HSV){H, S, V})
-#define HSL(H, S, L) ((HSL){H, S, l})
+#define HSL(H, S, L) ((HSL){H, S, L})
 
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
