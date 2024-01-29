@@ -1,39 +1,51 @@
+#define _GNU_SOURCE
 #include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <ctype.h>
+#include <math.h>
 
 #define TOO_MANY_COLOURS_IMPLEMENTATION
 #include "too_many_colours.h"
 
 typedef enum {
-	COLOUR_FORMAT_NONE = 0,
-	COLOUR_FORMAT_RGB,
-	COLOUR_FORMAT_HSV,
-	COLOUR_FORMAT_HSL,
+	LOG_ERROR,
+	LOG_WARNING,
+} LogPriority;
+
+typedef enum {
+	COLOUR_FORMAT_NONE = -1,
+	COLOUR_FORMAT_RGB = 0,
+	COLOUR_FORMAT_HSV = 1,
+	COLOUR_FORMAT_HSL = 2,
 } ColourFormat;
 
 typedef enum {
-	REPR_NONE = 0,
-	REPR_INT,
-	REPR_FLOAT,
-	REPR_HEX,
-} Repr;
+	FORMAT_NONE = -1,
+	FORMAT_HEX,
+	FORMAT_INT,
+	FORMAT_FLOAT,
+} Format;
 
 typedef struct {
-	double comp[3];
-	RGB rgb;
-	HSV hsv;
-	HSL hsl;
+	ColourFormat format;
+	union {
+		double c[3];
+		RGB rgb;
+		HSV hsv;
+		HSL hsl;
+	} data;
 } Colour;
 
-int log_warning(const char* fmt, ...) {
+int log_message(LogPriority priority, const char* fmt, ...) {
 	va_list list;
 	int result;
 
 	va_start(list, fmt);
-	fprintf(stderr, "\033[1m\033[33mWARNING: ");
+	fprintf(stderr, "\033[1m");
+	if (priority == LOG_ERROR) fprintf(stderr, "\033[31mERROR: ");
+	if (priority == LOG_WARNING) fprintf(stderr, "\033[33mWARNING: ");
 	result = vfprintf(stderr, fmt, list);
 	fprintf(stderr, "\033[0m");
 	va_end(list);
@@ -41,68 +53,49 @@ int log_warning(const char* fmt, ...) {
 	return result;
 }
 
-int log_error(const char* fmt, ...) {
-	va_list list;
-	int result;
-
-	va_start(list, fmt);
-	fprintf(stderr, "\033[1m\033[31mERROR: ");
-	result = vfprintf(stderr, fmt, list);
-	fprintf(stderr, "\033[0m");
-	va_end(list);
-
-	return result;
-}
-
-void draw_block(FILE* stream, RGB left, RGB right) {
-	for (int i = 0; i < 3; i++) {
-		fprintf(stream, "\033[38;2;%d;%d;%dm", (int)(255.0 * left.r), (int)(255.0 * left.g), (int)(255.0 * left.b));
-		fprintf(stream, "\033[48;2;%d;%d;%dm", (int)(255.0 * left.r), (int)(255.0 * left.g), (int)(255.0 * left.b));
-		fprintf(stream, "      \033[0m");
-		fprintf(stream, "\033[38;2;%d;%d;%dm", (int)(255.0 * right.r), (int)(255.0 * right.g), (int)(255.0 * right.b));
-		fprintf(stream, "\033[48;2;%d;%d;%dm", (int)(255.0 * right.r), (int)(255.0 * right.g), (int)(255.0 * right.b));
-		fprintf(stream, "      \033[0m\n");
+void convert(ColourFormat out_format, Colour* in, Colour* out) {
+	switch (in->format) {
+		case COLOUR_FORMAT_RGB: switch (out_format) {
+			case COLOUR_FORMAT_RGB: clamp_rgb(&in->data.rgb); *out = *in; break;
+			case COLOUR_FORMAT_HSV: out->data.hsv = rgb_to_hsv(in->data.rgb); out->format = COLOUR_FORMAT_HSV; break;
+			case COLOUR_FORMAT_HSL: out->data.hsl = rgb_to_hsl(in->data.rgb); out->format = COLOUR_FORMAT_HSL; break;
+			default: break;
+		} break;
+		case COLOUR_FORMAT_HSV: switch (out_format) {
+			case COLOUR_FORMAT_RGB: out->data.rgb = hsv_to_rgb(in->data.hsv); out->format = COLOUR_FORMAT_RGB; break;
+			case COLOUR_FORMAT_HSV: clamp_hsv(&in->data.hsv); *out = *in; break;
+			case COLOUR_FORMAT_HSL: out->data.hsl = hsv_to_hsl(in->data.hsv); out->format = COLOUR_FORMAT_HSL; break;
+			default: break;
+		} break;
+		case COLOUR_FORMAT_HSL: switch (out_format) {
+			case COLOUR_FORMAT_RGB: out->data.rgb = hsl_to_rgb(in->data.hsl); out->format = COLOUR_FORMAT_RGB; break;
+			case COLOUR_FORMAT_HSV: out->data.hsv = hsl_to_hsv(in->data.hsl); out->format = COLOUR_FORMAT_HSV; break;
+			case COLOUR_FORMAT_HSL: clamp_hsl(&in->data.hsl); *out = *in; break;
+			default: break;
+		} break;
+		default: break;
 	}
 }
 
-ColourFormat parse_colour_format(const char* string) {
+ColourFormat parse_colour_format(char* string) {
 	while (isspace(*string)) string += 1;
+	for (char* s = string; *s != '\0'; s++) *s = tolower(*s);
+	if (strncmp(string, "rgb", 3) == 0) return COLOUR_FORMAT_RGB;
+	if (strncmp(string, "hsv", 3) == 0) return COLOUR_FORMAT_HSV;
+	if (strncmp(string, "hsl", 3) == 0) return COLOUR_FORMAT_HSL;
 
-	if (tolower(string[0]) == 'r' && tolower(string[1]) == 'g' && tolower(string[2]) == 'b') return COLOUR_FORMAT_RGB;
-	if (tolower(string[0]) == 'h' && tolower(string[1]) == 's' && tolower(string[2]) == 'v') return COLOUR_FORMAT_HSV;
-	if (tolower(string[0]) == 'h' && tolower(string[1]) == 's' && tolower(string[2]) == 'l') return COLOUR_FORMAT_HSL;
-
-	log_error("ukown colour format '%s'\n", string);
+	log_message(LOG_ERROR, "unrecognised colour format '%s'\n", string);
 	exit(EXIT_FAILURE);
 }
 
-Repr parse_format(const char* string) {
+Format parse_format(char* string) {
 	while (isspace(*string)) string += 1;
+	for (char* s = string; *s != '\0'; s++) *s = tolower(*s);
+	if (strncmp(string, "hex", 3) == 0) return FORMAT_HEX;
+	if (strncmp(string, "int", 3) == 0) return FORMAT_INT;
+	if (strncmp(string, "float", 3) == 0) return FORMAT_FLOAT;
 
-	if (tolower(string[0]) == 'h' && tolower(string[1]) == 'e' && tolower(string[2]) == 'x') return REPR_HEX;
-	if (tolower(string[0]) == 'i' && tolower(string[1]) == 'n' && tolower(string[2]) == 't') return REPR_INT;
-	if (tolower(string[0]) == 'f' && tolower(string[1]) == 'l' && tolower(string[2]) == 'o' &&
-		tolower(string[3]) == 'a' && tolower(string[4]) == 't') return REPR_FLOAT;
-
-	log_error("ukown format '%s'\n", string);
-	exit(EXIT_FAILURE);
-}
-
-int digit_value(char c) {
-	switch (c) {
-		case '0': return 0;
-		case '1': return 1;
-		case '2': return 2;
-		case '3': return 3;
-		case '4': return 4;
-		case '5': return 5;
-		case '6': return 6;
-		case '7': return 7;
-		case '8': return 8;
-		case '9': return 9;
-	}
-
-	log_error("invalid digit character '%c'\n", c);
+	log_message(LOG_ERROR, "unrecognised format '%s'\n", string);
 	exit(EXIT_FAILURE);
 }
 
@@ -124,276 +117,366 @@ int hex_value(char c) {
 		case 'D': case 'd': return 13;
 		case 'E': case 'e': return 14;
 		case 'F': case 'f': return 15;
+		default: return 0;
 	}
-
-	log_error("invalid hex character '%c'\n", c);
-	exit(EXIT_FAILURE);
 }
 
-void parse_hex(const char* string, Colour* colour) {
+Colour parse_hex(const char* string) {
 	while (isspace(*string)) string += 1;
-	if (string[0] != '#') {
-		log_warning("expected format #RRGGBB");
+	if (*string != '#' || strlen(string) < 7) {
+		log_message(LOG_ERROR, "expected hex format #RRGGBB\n");
 		exit(EXIT_FAILURE);
 	}
-	
-	colour->comp[0] = 16.0*(double)hex_value(string[1]) + (double)hex_value(string[2]);
-	colour->comp[1] = 16.0*(double)hex_value(string[3]) + (double)hex_value(string[4]);
-	colour->comp[2] = 16.0*(double)hex_value(string[5]) + (double)hex_value(string[6]);
+
+	Colour colour;
+	colour.format = COLOUR_FORMAT_NONE;
+	colour.data.c[0] = 16.0*(double)hex_value(string[1]) + (double)hex_value(string[2]);
+	colour.data.c[1] = 16.0*(double)hex_value(string[3]) + (double)hex_value(string[4]);
+	colour.data.c[2] = 16.0*(double)hex_value(string[5]) + (double)hex_value(string[6]);
+	return colour;
 }
 
-void parse_int(const char* string, Colour* colour) {
+Colour parse_int(const char* string) {
+	Colour colour;
 	for (int i = 0; i < 3; i++) {
 		while (isspace(*string)) string += 1;
 
 		int value = 0;
 		while (isdigit(*string)) {
 			value *= 10;
-			value += digit_value(*string);
+			value += *string - '0';
 			string += 1;
 		}
 
-		colour->comp[i] = (double)value;
+		colour.data.c[i] = value;
 	}
+
+	return colour;
 }
 
-void parse_float(const char* string, Colour* colour) {
-	while (isspace(*string)) string += 1;
-
+Colour parse_float(const char* string) {
+	Colour colour;
 	for (int i = 0; i < 3; i++) {
 		while (isspace(*string)) string += 1;
 
 		double value = 0;
+		double mult = 0.1;
 		while (isdigit(*string)) {
-			value *= 10;
-			value += digit_value(*string);
+			value *= 10.0;
+			value += *string - '0';
 			string += 1;
 		}
 		if (*string == '.') {
 			string += 1;
-			double mult = 0.1;
 			while (isdigit(*string)) {
+				value += mult * (double)(*string - '0');
 				mult *= 0.1;
-				value += digit_value(*string) * mult;
 				string += 1;
 			}
 		}
 
-		colour->comp[i] = (double)value;
+		colour.data.c[i] = value;
+	}
+
+	return colour;
+}
+
+void eval_mod(char* string, Colour* colour) {
+	while (isspace(*string)) string += 1;
+	for (char* s = string; *s != '\0'; s++) *s = tolower(*s);
+
+	ColourFormat original_colour_format = colour->format;
+	ColourFormat mod_colour_format = COLOUR_FORMAT_NONE;
+
+	if (strncmp(string, "rgb", 3) == 0) {
+		string += 3;
+		mod_colour_format = COLOUR_FORMAT_RGB;
+	} else if (strncmp(string, "hsv", 3) == 0) {
+		string += 3;
+		mod_colour_format = COLOUR_FORMAT_HSV;
+	} else if (strncmp(string, "hsl", 3) == 0) {
+		string += 3;
+		mod_colour_format = COLOUR_FORMAT_HSL;
+	} else goto error;
+
+	while (isspace(*string)) string += 1;
+	if (*string++ != ':') goto error;
+	while (isspace(*string)) string += 1;
+
+	char comp = tolower(*string++);
+	if (comp == '\0') goto error;
+	while (isspace(*string)) string += 1;
+	char op = tolower(*string++);
+	if (op == '\0') goto error;
+	while (isspace(*string)) string += 1;
+
+	double value = 0;
+	double mult = 0.1;
+	while (isdigit(*string)) {
+		value *= 10.0;
+		value += *string - '0';
+		string += 1;
+	}
+	if (*string == '.') {
+		string += 1;
+		while (isdigit(*string)) {
+			value += mult * (double)(*string - '0');
+			mult *= 0.1;
+			string += 1;
+		}
+	}
+
+	while (isspace(*string)) string += 1;
+	int per = *string++ == '%';
+
+	convert(mod_colour_format, colour, colour);
+
+	double* var = NULL;
+
+	if (colour->format == COLOUR_FORMAT_RGB) {
+		if (comp == 'r') { var = &colour->data.rgb.r; if (!per) value /= 255.0; }
+		else if (comp == 'g') { var = &colour->data.rgb.g; if (!per) value /= 255.0; }
+		else if (comp == 'b') { var = &colour->data.rgb.b; if (!per) value /= 255.0; }
+		else goto error;
+	} else if (colour->format == COLOUR_FORMAT_HSV) {
+		if (comp == 'h') { var = &colour->data.hsv.h; if (!per) value /= 1.0; }
+		else if (comp == 's') { var = &colour->data.hsv.s; if (!per) value /= 100.0; }
+		else if (comp == 'v') { var = &colour->data.hsv.v; if (!per) value /= 100.0; }
+		else goto error;
+	} else if (colour->format == COLOUR_FORMAT_HSL) {
+		if (comp == 'h') { var = &colour->data.hsl.h; if (!per) value /= 1.0; }
+		else if (comp == 's') { var = &colour->data.hsl.s; if (!per) value /= 100.0; }
+		else if (comp == 'l') { var = &colour->data.hsl.l; if (!per) value /= 100.0; }
+		else goto error;
+	} else goto error;
+
+	if (per) {
+		if (op == '+') *var += *var * value / 100.0;
+		else if (op == '-') *var -= *var * value / 100.0;
+		else if (op == '=') {
+			if (comp == 'h') value *= 360.0;
+			*var = value / 100.0;
+		}
+	} else {
+		if (op == '+') *var += value;
+		else if (op == '-') *var -= value;
+		else if (op == '=') *var = value;
+	}
+
+	if (colour->format == COLOUR_FORMAT_RGB) clamp_rgb(&colour->data.rgb);
+	else if (colour->format == COLOUR_FORMAT_HSV) clamp_hsv(&colour->data.hsv);
+	else if (colour->format == COLOUR_FORMAT_HSL) clamp_hsl(&colour->data.hsl);
+	else goto error;
+
+	convert(original_colour_format, colour, colour);
+
+	return;
+	error: {
+		log_message(LOG_ERROR, "expected mod format '<colour format>:<colour component>[=|+|-]<num><%>?]'\n");
+		exit(EXIT_FAILURE);
+	}
+} 
+
+void draw_block(FILE* stream, RGB left, RGB right) {
+	for (int i = 0; i < 3; i++) {
+		fprintf(stream, "\033[38;2;%d;%d;%dm", (int)round(255.0 * left.r), (int)round(255.0 * left.g), (int)round(255.0 * left.b));
+		fprintf(stream, "\033[48;2;%d;%d;%dm", (int)round(255.0 * left.r), (int)round(255.0 * left.g), (int)round(255.0 * left.b));
+		fprintf(stream, "      \033[0m");
+		fprintf(stream, "\033[38;2;%d;%d;%dm", (int)round(255.0 * right.r), (int)round(255.0 * right.g), (int)round(255.0 * right.b));
+		fprintf(stream, "\033[48;2;%d;%d;%dm", (int)round(255.0 * right.r), (int)round(255.0 * right.g), (int)round(255.0 * right.b));
+		fprintf(stream, "      \033[0m\n");
 	}
 }
 
-void eval_mod(const char* mod, ColourFormat format, RGB* rgb, HSV* hsv, HSL* hsl) {
-
+void usage(const char* program) {
+	printf("Usage:\n");
+	printf("  %s [options]\n", program);
+	printf("\n");
+	printf("Options:\n");
+	printf("  -ic [RGB|HSV|HSL]\n");
+	printf("  -oc [RGB|HSV|HSL]\n");
+	printf("  -if [HEX|INT|FLOAT]\n");
+	printf("  -of [HEX|INT|FLOAT]\n");
+	printf("  -i <file>\n");
+	printf("  -o <file>\n");
+	printf("  -b\n");
+	printf("  -m\n");
+	printf("\n");
 }
 
 int main(int argc, char* argv[]) {
-	int block = 0;
 	ColourFormat input_colour_format = COLOUR_FORMAT_NONE;
 	ColourFormat output_colour_format = COLOUR_FORMAT_NONE;
-	Repr input_format = REPR_NONE;
-	Repr output_format = REPR_NONE;
-	const char* mod = NULL;
-	const char* input_file_path = NULL;
-	const char* output_file_path = NULL;
-	FILE* input_file = NULL;
-	FILE* output_file = NULL;
+	Format input_format = FORMAT_NONE;
+	Format output_format = FORMAT_NONE;
+	const char* input_path = NULL;
+	const char* output_path = NULL;
+	FILE* input_file = stdin;
+	FILE* output_file = stdout;
+	int block = 0;
+
+	Colour in;
+	Colour out;
+
 	char* line = NULL;
 	size_t len = 0;
 
-	Colour* colour = NULL;
-	RGB left = {0};
-	RGB right = {0};
-	RGB rgb = {0};
-	HSV hsv = {0};
-	HSL hsl = {0};
-
 	for (int i = 1; i < argc; i++) {
-		const char* value;
-		
-		if (strncmp(argv[i], "-b", 3) == 0) {
-			block = 1;
+		char* value = NULL;
+
+		if (strncmp(argv[i], "-h", 2) == 0 || strncmp(argv[i], "--help", 6) == 0) {
+			usage(argv[0]);
+			return EXIT_SUCCESS;
 		} else if (strncmp(argv[i], "-ic", 3) == 0) {
-			if (argv[i][3] == '\0') value = argv[++i];
+			if (argv[i][3] == '\0' && i < argc-1) value = argv[++i];
 			else value = argv[i]+3;
 
 			if (input_colour_format != COLOUR_FORMAT_NONE)
-				log_warning("input colour format will be overriden by '%s'\n", value);
+				log_message(LOG_WARNING, "colour input format will be overriden by '%s'\n", value);
 			input_colour_format = parse_colour_format(value);
 		} else if (strncmp(argv[i], "-oc", 3) == 0) {
-			if (argv[i][3] == '\0') value = argv[++i];
+			if (argv[i][3] == '\0' && i < argc-1) value = argv[++i];
 			else value = argv[i]+3;
 
 			if (output_colour_format != COLOUR_FORMAT_NONE)
-				log_warning("output colour format will be overriden by '%s'\n", value);
+				log_message(LOG_WARNING, "colour output format will be overriden by '%s'\n", value);
 			output_colour_format = parse_colour_format(value);
 		} else if (strncmp(argv[i], "-if", 3) == 0) {
-			if (argv[i][3] == '\0') value = argv[++i];
+			if (argv[i][3] == '\0' && i < argc-1) value = argv[++i];
 			else value = argv[i]+3;
 
-			if (input_format != REPR_NONE)
-				log_warning("input format will be overriden by '%s'\n", value);
+			if (input_format != FORMAT_NONE)
+				log_message(LOG_WARNING, "input format will be overriden by '%s'\n", value);
 			input_format = parse_format(value);
 		} else if (strncmp(argv[i], "-of", 3) == 0) {
-			if (argv[i][3] == '\0') value = argv[++i];
+			if (argv[i][3] == '\0' && i < argc-1) value = argv[++i];
 			else value = argv[i]+3;
 
-			if (output_format != REPR_NONE)
-				log_warning("output format will be overriden by '%s'\n", value);
+			if (output_format != FORMAT_NONE)
+				log_message(LOG_WARNING, "output format will be overriden by '%s'\n", value);
 			output_format = parse_format(value);
-		} else if (strncmp(argv[i], "-m", 2) == 0) {
-			if (argv[i][2] == '\0') value = argv[++i];
-			else value = argv[i]+2;
-
-			if (mod != NULL)
-				log_warning("mod will be overriden by '%s'\n", value);
-			mod = value;
 		} else if (strncmp(argv[i], "-i", 2) == 0) {
-			if (argv[i][2] == '\0') value = argv[++i];
+			if (argv[i][2] == '\0' && i < argc-1) value = argv[++i];
 			else value = argv[i]+2;
 
-			if (input_file_path != NULL) {
-				log_error("Multiple input files not supported\n");
+			if (input_path != NULL) {
+				log_message(LOG_ERROR, "multiple input files are not supported\n");
 				return EXIT_FAILURE;
 			}
-			input_file_path = value;
+			input_path = value;
 		} else if (strncmp(argv[i], "-o", 2) == 0) {
-			if (argv[i][2] == '\0') value = argv[++i];
+			if (argv[i][2] == '\0' && i < argc-1) value = argv[++i];
 			else value = argv[i]+2;
 
-			if (output_file_path != NULL) {
-				log_error("Multiple output files not supported\n");
+			if (output_path != NULL) {
+				log_message(LOG_ERROR, "multiple output files are not supported\n");
 				return EXIT_FAILURE;
 			}
-			output_file_path = value;
+			output_path = value;
+		} else if (strncmp(argv[i], "-b", 2) == 0) {
+			block = 1;
+		} else if (strncmp(argv[i], "-m", 2) == 0) {
+			if (argv[i][2] == '\0' && i < argc-1) value = argv[++i];
+			else value = argv[i]+2;
 		} else {
-			log_error("uknown option '%s'\n", argv[i]);
+			log_message(LOG_ERROR, "unrecognised option '%s'\n", argv[i]);
 			return EXIT_FAILURE;
 		}
 	}
 
-	if (output_format == REPR_NONE && output_colour_format == COLOUR_FORMAT_NONE) {
-		output_colour_format = input_colour_format;
-		output_format = input_format;
-	}
-
-	if (input_format == REPR_HEX && input_colour_format != COLOUR_FORMAT_RGB) {
-		log_error("Hex input is only for RGB\n");
+	if (input_colour_format == COLOUR_FORMAT_NONE || input_format == FORMAT_NONE) {
+		log_message(LOG_ERROR, "input colour format and input format need to be specified\n");
 		return EXIT_FAILURE;
 	}
 
-	if (output_format == REPR_HEX && output_colour_format != COLOUR_FORMAT_RGB) {
-		log_error("Hex output is only for RGB\n");
+	if (output_colour_format == COLOUR_FORMAT_NONE) output_colour_format = input_colour_format;
+	if (output_format == FORMAT_NONE) output_format = input_format;
+
+	if (input_format == FORMAT_HEX && input_colour_format != COLOUR_FORMAT_RGB) {
+		log_message(LOG_ERROR, "hex colour format only supported for rgb\n");
 		return EXIT_FAILURE;
 	}
 
-	if (input_file_path == NULL) {
-		input_file = stdin;
-	} else {
-		input_file = fopen(input_file_path, "r");
+	if (output_format == FORMAT_HEX && output_colour_format != COLOUR_FORMAT_RGB) {
+		log_message(LOG_ERROR, "hex colour format only supported for rgb\n");
+		return EXIT_FAILURE;
+	}
+
+	if (input_path != NULL) {
+		input_file = fopen(input_path, "r");
 		if (input_file == NULL) {
-			log_error("could not open input file '%s'\n", input_file_path);
+			log_message(LOG_ERROR, "failed to open '%s'\n", input_path);
 			return EXIT_FAILURE;
 		}
 	}
 
 	getline(&line, &len, input_file);
+	if (input_format == FORMAT_HEX) in = parse_hex(line);
+	else if (input_format == FORMAT_INT) in = parse_int(line);
+	else if (input_format == FORMAT_FLOAT) in = parse_float(line);
 
-	switch (input_colour_format) {
-		case COLOUR_FORMAT_NONE:
-			log_error("colour format must be specified\n");
-			return EXIT_FAILURE;
-		case COLOUR_FORMAT_RGB: colour = (Colour*)&rgb; break;
-		case COLOUR_FORMAT_HSV: colour = (Colour*)&hsv; break;
-		case COLOUR_FORMAT_HSL: colour = (Colour*)&hsl; break;
+	in.format = input_colour_format;
+	if (in.format == COLOUR_FORMAT_RGB) {
+		in.data.c[0] /= 255.0;
+		in.data.c[1] /= 255.0;
+		in.data.c[2] /= 255.0;
+		clamp_rgb(&in.data.rgb);
+	} else if (in.format == COLOUR_FORMAT_HSV) {
+		in.data.c[1] /= 100.0;
+		in.data.c[2] /= 100.0;
+		clamp_hsv(&in.data.hsv);
+	} else if (in.format == COLOUR_FORMAT_HSL) {
+		in.data.c[1] /= 100.0;
+		in.data.c[2] /= 100.0;
+		clamp_hsl(&in.data.hsl);
 	}
 
-	switch (input_format) {
-		case REPR_NONE: log_error("Not implemented\n"); return EXIT_FAILURE;
-		case REPR_HEX: parse_hex(line, colour); break;
-		case REPR_INT: parse_int(line, colour); break;
-		case REPR_FLOAT: parse_float(line, colour); break;
+	convert(output_colour_format, &in, &out);
+
+	for (int i = 1; i < argc; i++) {
+		char* value = NULL;
+
+		if (strncmp(argv[i], "-m", 2) == 0) {
+			if (argv[i][2] == '\0' && i < argc-1) value = argv[++i];
+			else value = argv[i]+2;
+
+			eval_mod(value, &out);
+		}
 	}
 
-	switch (input_colour_format) {
-		case COLOUR_FORMAT_NONE: break;
-		case COLOUR_FORMAT_RGB:
-			colour->comp[0] /= 255.0;
-			colour->comp[1] /= 255.0;
-			colour->comp[2] /= 255.0;
-			clamp_rgb(&rgb);
-			break;
-		case COLOUR_FORMAT_HSV: 
-			colour->comp[1] /= 100.0;
-			colour->comp[2] /= 100.0;
-			clamp_hsv(&hsv);
-			break;
-		case COLOUR_FORMAT_HSL: 
-			colour->comp[1] /= 100.0;
-			colour->comp[2] /= 100.0;
-			clamp_hsl(&hsl);
-			break;
-	}
-
-	free(line);
-
-	if (input_colour_format == COLOUR_FORMAT_RGB) {
-		if (output_colour_format == COLOUR_FORMAT_HSV) hsv = rgb_to_hsv(rgb);
-		if (output_colour_format == COLOUR_FORMAT_HSL) hsl = rgb_to_hsl(rgb);
-	} else if (input_colour_format == COLOUR_FORMAT_HSV) {
-		if (output_colour_format == COLOUR_FORMAT_RGB) rgb = hsv_to_rgb(hsv);
-		if (output_colour_format == COLOUR_FORMAT_HSL) hsl = hsv_to_hsl(hsv);
-	} else if (input_colour_format == COLOUR_FORMAT_HSL) {
-		if (output_colour_format == COLOUR_FORMAT_RGB) rgb = hsl_to_rgb(hsl);
-		if (output_colour_format == COLOUR_FORMAT_HSV) hsv = hsl_to_hsv(hsl);
-	}
-
-	eval_mod(mod, output_colour_format, &rgb, &hsv, &hsl);
-
-	if (output_file_path == NULL) {
-		output_file = stdout;
-	} else {
-		output_file = fopen(output_file_path, "r");
+	if (output_path != NULL) {
+		output_file = fopen(output_path, "r");
 		if (output_file == NULL) {
-			log_error("could not open output file '%s'\n", output_file_path);
+			log_message(LOG_ERROR, "failed to open '%s'\n", output_path);
 			return EXIT_FAILURE;
 		}
 	}
 
-	if (output_format == REPR_HEX) {
-		fprintf(output_file, "#%02X%02X%02X\n", (int)(255.0 * rgb.r), (int)(255.0 * rgb.g), (int)(255.0 * rgb.b));
-	} else if (output_format == REPR_INT) {
-		if (output_colour_format == COLOUR_FORMAT_RGB)
-			fprintf(output_file, "%d %d %d\n", (int)(255.0 * rgb.r), (int)(255.0 * rgb.g), (int)(255.0 * rgb.b));
-		if (output_colour_format == COLOUR_FORMAT_HSV)
-			fprintf(output_file, "%d %d %d\n", (int)(hsv.h), (int)(100.0 * hsv.s), (int)(100.0 * hsv.v));
-		if (output_colour_format == COLOUR_FORMAT_HSL)
-			fprintf(output_file, "%d %d %d\n", (int)(hsl.h), (int)(100.0 * hsl.s), (int)(100.0 * hsl.l));
-	} else if (output_format == REPR_FLOAT) {
-		if (output_colour_format == COLOUR_FORMAT_RGB)
-			fprintf(output_file, "%lf %lf %lf\n", (255.0 * rgb.r), (255.0 * rgb.g), (255.0 * rgb.b));
-		if (output_colour_format == COLOUR_FORMAT_HSV)
-			fprintf(output_file, "%lf %lf %lf\n", (hsv.h), (100.0 * hsv.s), (100.0 * hsv.v));
-		if (output_colour_format == COLOUR_FORMAT_HSL)
-			fprintf(output_file, "%lf %lf %lf\n", (hsl.h), (100.0 * hsl.s), (100.0 * hsl.l));
+	if (output_format == FORMAT_HEX) {
+		if (out.format == COLOUR_FORMAT_RGB)
+			fprintf(output_file, "#%02X%02X%02X\n", (int)(255.0 * out.data.rgb.r), (int)(255.0 * out.data.rgb.g), (int)(255.0 * out.data.rgb.b));
+	} else if (output_format == FORMAT_INT) {
+		if (out.format == COLOUR_FORMAT_RGB)
+			fprintf(output_file, "%d %d %d\n", (int)round(255.0 * out.data.rgb.r), (int)round(255.0 * out.data.rgb.g), (int)round(255.0 * out.data.rgb.b));
+		if (out.format == COLOUR_FORMAT_HSV)
+			fprintf(output_file, "%d %d %d\n", (int)round(1.0 * out.data.hsv.h), (int)round(100.0 * out.data.hsv.s), (int)round(100.0 * out.data.hsv.v));
+		if (out.format == COLOUR_FORMAT_HSL)
+			fprintf(output_file, "%d %d %d\n", (int)round(1.0 * out.data.hsl.h), (int)round(100.0 * out.data.hsl.s), (int)round(100.0 * out.data.hsl.l));
+	} else if (output_format == FORMAT_FLOAT) {
+		if (out.format == COLOUR_FORMAT_RGB)
+			fprintf(output_file, "%lf %lf %lf\n", (255.0 * out.data.rgb.r), (255.0 * out.data.rgb.g), (255.0 * out.data.rgb.b));
+		if (out.format == COLOUR_FORMAT_HSV)
+			fprintf(output_file, "%lf %lf %lf\n", (1.0 * out.data.hsv.h), (100.0 * out.data.hsv.s), (100.0 * out.data.hsv.v));
+		if (out.format == COLOUR_FORMAT_HSL)
+			fprintf(output_file, "%lf %lf %lf\n", (1.0 * out.data.hsl.h), (100.0 * out.data.hsl.s), (100.0 * out.data.hsl.l));
 	}
 
 	if (block) {
-		switch (input_colour_format) {
-			case COLOUR_FORMAT_NONE: break;
-			case COLOUR_FORMAT_RGB: left = rgb; break;
-			case COLOUR_FORMAT_HSV: left = hsv_to_rgb(hsv); break;
-			case COLOUR_FORMAT_HSL: left = hsl_to_rgb(hsl); break;
-		}
-
-		switch (output_colour_format) {
-			case COLOUR_FORMAT_NONE: break;
-			case COLOUR_FORMAT_RGB: right = rgb; break;
-			case COLOUR_FORMAT_HSV: right = hsv_to_rgb(hsv); break;
-			case COLOUR_FORMAT_HSL: right = hsl_to_rgb(hsl); break;
-		}
-
-		draw_block(output_file, left, right);
+		Colour left;
+		Colour right;
+		convert(COLOUR_FORMAT_RGB, &out, &left);
+		convert(COLOUR_FORMAT_RGB, &out, &right);
+		draw_block(output_file, left.data.rgb, right.data.rgb);
 	}
 
 	if (input_file != stdin) fclose(input_file);
