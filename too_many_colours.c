@@ -454,7 +454,7 @@ int main(int argc, char* argv[]) {
 
 	if (output_format == FORMAT_HEX) {
 		if (out.format == COLOUR_FORMAT_RGB)
-			fprintf(output_file, "#%02X%02X%02X\n", (int)(255.0 * out.data.rgb.r), (int)(255.0 * out.data.rgb.g), (int)(255.0 * out.data.rgb.b));
+			fprintf(output_file, "#%02X%02X%02X\n", (int)round(255.0 * out.data.rgb.r), (int)round(255.0 * out.data.rgb.g), (int)round(255.0 * out.data.rgb.b));
 	} else if (output_format == FORMAT_INT) {
 		if (out.format == COLOUR_FORMAT_RGB)
 			fprintf(output_file, "%d %d %d\n", (int)round(255.0 * out.data.rgb.r), (int)round(255.0 * out.data.rgb.g), (int)round(255.0 * out.data.rgb.b));
