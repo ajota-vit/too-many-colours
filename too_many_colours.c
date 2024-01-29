@@ -272,7 +272,7 @@ void eval_mod(char* string, Colour* colour) {
 
 	return;
 	error: {
-		log_message(LOG_ERROR, "expected mod format '<colour format>:<colour component>[=|+|-]<num><%>?]'\n");
+		log_message(LOG_ERROR, "expected mod format '<colour format>:<colour component>[=|+|-][num|%%]'\n");
 		exit(EXIT_FAILURE);
 	}
 } 
@@ -293,14 +293,14 @@ void usage(const char* program) {
 	printf("  %s [options]\n", program);
 	printf("\n");
 	printf("Options:\n");
-	printf("  -ic [RGB|HSV|HSL]\n");
-	printf("  -oc [RGB|HSV|HSL]\n");
-	printf("  -if [HEX|INT|FLOAT]\n");
-	printf("  -of [HEX|INT|FLOAT]\n");
-	printf("  -i <file>\n");
-	printf("  -o <file>\n");
-	printf("  -b\n");
-	printf("  -m\n");
+	printf("  -ic [RGB|HSV|HSL]    input colour format\n");
+	printf("  -oc [RGB|HSV|HSL]    output colour format\n");
+	printf("  -if [HEX|INT|FLOAT]  input format\n");
+	printf("  -of [HEX|INT|FLOAT]  output format\n");
+	printf("  -i <file>            input file\n");
+	printf("  -o <file>            output file\n");
+	printf("  -b                   draws a coloured block with ansi escape codes\n");
+	printf("  -m                   '<colour format>:<colour component>[=|+|-][num|%%]' modify different aspects of a colour\n");
 	printf("\n");
 }
 
